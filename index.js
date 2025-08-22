@@ -4,25 +4,26 @@ const multer = require('multer');
 const app = express();
 const hbs = require('hbs');
 const path = require('path');
-const fs = require("fs");
-// const dotenv = require('dotenv');
+const dotenv = require('dotenv');
+const {BlobServiceClient} = require('@azure/storage-blob')
 
-// dotenv.config();
+dotenv.config();
 const port = process.env.PORT || 3000;
 const viewsPath = path.join(__dirname, '/templates/views');
 const partialsPath = path.join(__dirname, '/templates/component');
 
-const storage = multer.diskStorage({
-  destination: function (req, image, cb) {
-    cb(null, './public/images')
-  },
-  filename: function (req, image, cb) {
-    const filename = Date.now() + '-' + image.fieldname;
-    cb(null, filename );
-  }
-})
+const sas = process.env.SAS_TOKEN;
+const account = process.env.STORAGE_ACCOUNT_NAME;
+const container = process.env.CONTAINER_NAME;
+
+
+const storage = multer.memoryStorage();
 
 const upload = multer({ storage: storage })
+
+const blobServiceClient = new BlobServiceClient(`https://${account}.blob.core.windows.net/?${sas}`);
+
+const containerServiceClient = blobServiceClient.getContainerClient(container);
 
 // Set up view engine
 app.set('view engine', 'hbs');
@@ -41,20 +42,31 @@ app.get('/', (req, res) => {
     });
 });
 
-app.post('/upload', upload.single('image'), (req, res) => {
+app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) {
     return res.status(400).send('No file uploaded');
   }else{
+    try {
+      const blobName = req.file.originalname + Date.now();
+      const blobBlobClient = containerServiceClient.getBlockBlobClient(blobName);
+      const blobupload = await blobBlobClient.upload(req.file.buffer, req.file.size);
+
+      res.status(200).send('File uploaded successfully!');
+
+    } catch (error) {
+      console.log("Error" + error)
+    }
     console.log('File uploaded successfully:', req.file.filename);
   }
 });
 
-app.get('/view', (req, res) => {
-  let filenames = fs.readdirSync('./public/images');
+app.get('/view', async (req, res) => {
   let images = [];
-  filenames.forEach((file) => {
-    images.push('/images/' + file);
-  });
+  const blobList = containerServiceClient.listBlobsFlat();
+  for await(const blob of blobList){
+    images.push(`https://${account}.blob.core.windows.net/${container}/${blob.name}?${sas}`);
+  }
+  
   res.render('viewImage', {
     data: {
       title: "View Image",
@@ -62,6 +74,7 @@ app.get('/view', (req, res) => {
     }
   })
 });
+
 
 app.get("/:any", (req, res) => {
     res.render('404', {
